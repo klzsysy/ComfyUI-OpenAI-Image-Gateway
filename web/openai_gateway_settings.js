@@ -65,6 +65,8 @@ function getStrings() {
       fallbackTip: "当外部客户端写死 gpt-image-1 等名字且未单独配置时，自动路由到默认工作流。",
       exposeAliasesLabel: "在 /v1/models 中同时列出别名",
       exposeAliasesTip: "关闭时 /v1/models 仅展示你定义的主模型名称，更简洁。",
+      keepInputFilesLabel: "保留临时输入图（keep_input_files，排查问题时开启）",
+      keepInputFilesTip: "开启后不会自动删除上传到 input/openai_gateway/ 的临时输入图，便于排查请求内容；日常使用建议关闭。",
       respFormatLabel: "默认返回格式",
       apiKeysLabel: "API Keys（可选，逗号分隔）",
       apiKeysPlaceholder: "留空表示免鉴权",
@@ -125,6 +127,8 @@ function getStrings() {
     fallbackTip: "Routes unrecognized model strings (such as hardcoded gpt-image-1) to your default workflow.",
     exposeAliasesLabel: "Also list aliases in /v1/models",
     exposeAliasesTip: "When off, /v1/models returns only your primary model names.",
+    keepInputFilesLabel: "Keep temporary input images (keep_input_files, for debugging)",
+    keepInputFilesTip: "When enabled, uploaded images under input/openai_gateway/ are retained after execution for debugging. Keep off in normal use.",
     respFormatLabel: "Default Response Format",
     apiKeysLabel: "API Keys (optional, comma-separated)",
     apiKeysPlaceholder: "Leave empty to disable auth",
@@ -702,6 +706,8 @@ function createGatewaySettingsPanel() {
   // ---- Card 4: Global Settings ----
   const fallbackCheck = el("input", { type: "checkbox" });
   const exposeAliasesCheck = el("input", { type: "checkbox" });
+  const keepInputFilesCheck = el("input", { type: "checkbox" });
+  const globalStatus = el("div", { class: "oig-status" });
   const respFormatSelect = el("select", { class: "oig-select" }, [
     el("option", { value: "b64_json", text: "b64_json (OpenAI gpt-image-1)" }),
     el("option", { value: "url", text: "url (/view?filename=...)" }),
@@ -721,6 +727,8 @@ function createGatewaySettingsPanel() {
     text: t.saveGlobalBtn,
     onclick: async () => {
       clearStatus();
+      globalStatus.className = "oig-status";
+      globalStatus.textContent = "";
       saveGlobalBtn.disabled = true;
       try {
         const res = await adminRequest("/settings", {
@@ -728,6 +736,7 @@ function createGatewaySettingsPanel() {
           body: JSON.stringify({
             fallback_to_default_model: fallbackCheck.checked,
             expose_aliases: exposeAliasesCheck.checked,
+            keep_input_files: keepInputFilesCheck.checked,
             default_response_format: respFormatSelect.value,
             api_keys: apiKeysInput.value,
             timeout: Number(timeoutInput.value || 600),
@@ -737,8 +746,13 @@ function createGatewaySettingsPanel() {
         state = res.state;
         renderState();
         showStatus(t.savedOk, false);
+        globalStatus.textContent = t.savedOk;
+        globalStatus.className = "oig-status show ok";
       } catch (err) {
-        showStatus(String(err?.message || err), true);
+        const msg = String(err?.message || err);
+        showStatus(msg, true);
+        globalStatus.textContent = msg;
+        globalStatus.className = "oig-status show err";
       } finally {
         saveGlobalBtn.disabled = false;
       }
@@ -755,12 +769,17 @@ function createGatewaySettingsPanel() {
       exposeAliasesCheck,
       el("span", { text: t.exposeAliasesLabel }),
     ]),
+    el("label", { class: "oig-checkbox-row", title: t.keepInputFilesTip }, [
+      keepInputFilesCheck,
+      el("span", { text: t.keepInputFilesLabel }),
+    ]),
     el("div", { class: "oig-grid-2" }, [
       el("div", { class: "oig-field" }, [el("label", { text: t.respFormatLabel }), respFormatSelect]),
       el("div", { class: "oig-field" }, [el("label", { text: t.apiKeysLabel }), apiKeysInput]),
       el("div", { class: "oig-field" }, [el("label", { text: t.timeoutLabel }), timeoutInput]),
       el("div", { class: "oig-field" }, [el("label", { text: t.maxNLabel }), maxNInput]),
     ]),
+    globalStatus,
     el("div", { class: "oig-row", style: "justify-content: flex-end;" }, [saveGlobalBtn]),
   ]);
 
@@ -1069,6 +1088,7 @@ function createGatewaySettingsPanel() {
     const s = state.settings || {};
     fallbackCheck.checked = !!s.fallback_to_default_model;
     exposeAliasesCheck.checked = !!s.expose_aliases;
+    keepInputFilesCheck.checked = !!s.keep_input_files;
     respFormatSelect.value = s.default_response_format || "b64_json";
     apiKeysInput.value = (s.api_keys || []).join(", ");
     timeoutInput.value = String(s.timeout ?? 600);

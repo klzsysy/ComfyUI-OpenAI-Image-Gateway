@@ -402,13 +402,27 @@ def test_admin_multi_workflow_lifecycle_and_routing(tmp_path: Path):
             assert (tmp_path / "workflows" / "local" / "my-qwen-edit-bf16.json").is_file()
             assert not (tmp_path / "workflows" / "local" / "my-qwen-edit.json").exists()
 
-            # Update settings (disable fallback) and delete first model
+            # Update settings (disable fallback, toggle keep_input_files) and delete first model
             s_resp = await client.put(
                 "/api/openai-gateway/admin/settings",
-                json={"fallback_to_default_model": False, "default_model": "my-sdxl-t2i"},
+                json={
+                    "fallback_to_default_model": False,
+                    "keep_input_files": True,
+                    "default_model": "my-sdxl-t2i",
+                },
             )
             assert s_resp.status == 200
-            assert (await s_resp.json())["state"]["settings"]["fallback_to_default_model"] is False
+            s_body = await s_resp.json()
+            assert s_body["state"]["settings"]["fallback_to_default_model"] is False
+            assert s_body["state"]["settings"]["keep_input_files"] is True
+            assert "keep_input_files: true" in (tmp_path / "config.local.yaml").read_text(encoding="utf-8")
+
+            s_resp2 = await client.put(
+                "/api/openai-gateway/admin/settings",
+                json={"keep_input_files": False},
+            )
+            assert s_resp2.status == 200
+            assert (await s_resp2.json())["state"]["settings"]["keep_input_files"] is False
 
             del_resp = await client.delete("/api/openai-gateway/admin/models/my-qwen-edit-bf16")
             assert del_resp.status == 200
