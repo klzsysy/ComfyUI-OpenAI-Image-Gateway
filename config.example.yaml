@@ -1,0 +1,104 @@
+# Copy this file to `config.local.yaml` (gitignored) and customize your workflow paths & model names.
+# Changes can be hot-reloaded without restarting ComfyUI via: POST /v1/gateway/reload
+
+# Default model when a request omits `model` (or when `fallback_to_default_model: true`).
+default_model: qwen-image-2.1-turbo-edit
+
+# If true, unknown model names (e.g. a client hardcoded to "gpt-image-1") fall back to `default_model`.
+# Set to false to strictly require a configured model ID or alias (returns HTTP 404 otherwise).
+fallback_to_default_model: true
+
+# Advertise aliases alongside canonical model IDs in GET /v1/models.
+# Keep false so /v1/models lists only the exact model names you configured.
+expose_aliases: false
+
+# Optional Bearer API keys (also accepted via X-API-Key). Leave empty to disable authentication.
+# Can also be set via env: COMFY_OPENAI_GATEWAY_API_KEYS="sk-key1,sk-key2"
+api_keys: []
+
+# CORS allowed origins ("*" or comma-separated list like "https://example.com,http://localhost:3000").
+# Leave empty "" to disable CORS headers added by this gateway.
+cors_origins: "*"
+
+# Default response format when omitted by client: "b64_json" (matches OpenAI gpt-image-1) or "url".
+default_response_format: b64_json
+
+# Optional public base URL used when response_format="url" (e.g. "https://comfy.example.com").
+# public_base_url: "http://127.0.0.1:8188"
+
+# Per-request execution timeout in seconds (0 disables timeout).
+timeout: 600
+
+# Global cap on `n` (images per request) and per-image upload size in MiB.
+max_n: 4
+max_image_mb: 25
+
+# Allow JSON image fields to reference remote http(s):// image URLs.
+allow_remote_image_urls: true
+remote_url_timeout: 30
+
+# Delete temporary uploaded input images after each request finishes (set true for debugging).
+keep_input_files: false
+input_subfolder: openai_gateway
+
+models:
+  qwen-image-2.1-turbo-edit:
+    description: "Qwen-Image-2.1 Turbo FP8 multi-image edit & generation workflow"
+    workflow: workflows/examples/qwen_image_2_1_turbo_edit_api.json
+    aliases:
+      - gpt-image-1
+      - gpt-image-1.5
+      - gpt-image-2
+      - qwen-image-2.1-edit
+    output_node: "461"
+    prompt_required: true
+    allow_no_image: true
+    default_width: 1024
+    default_height: 1024
+    size_multiple: 32
+    timeout: 600
+
+    # Dynamic multi-image wiring: creates one LoadImage node per uploaded image and connects
+    # images.image_1 .. images.image_N to TextEncodeQwenImage21.
+    image_inputs:
+      mode: dynamic_load_image
+      max_images: 10
+      targets:
+        - node_id: "459:474"
+          input_prefix: "images.image_"
+          start_index: 1
+          clear_existing_prefix: true
+
+    # Parameter bindings: `<node_id>.inputs.<field_name>` (a single string or a list of targets).
+    bindings:
+      prompt: "459:474.inputs.prompt"
+      negative_prompt: "459:474.inputs.negative_prompt"
+      width: "459:456.inputs.width"
+      height: "459:456.inputs.height"
+      use_custom_size: "459:468.inputs.switch"
+      seed: "459:504.inputs.noise_seed"
+      cfg: "459:507.inputs.cfg"
+
+  # Example 2: Fixed LoadImage nodes (e.g. classic SDXL / Flux img2img workflows)
+  # flux-edit:
+  #   workflow: workflows/local/flux_edit_api.json
+  #   aliases:
+  #     - flux-klein-edit
+  #   output_node: "9"
+  #   allow_no_image: false
+  #   size_multiple: 16
+  #   image_inputs:
+  #     mode: load_image_nodes
+  #     prune_unused: true
+  #     nodes:
+  #       - node_id: "10"
+  #         input: "image"
+  #       - node_id: "11"
+  #         input: "image"
+  #   bindings:
+  #     prompt: "6.inputs.text"
+  #     negative_prompt: "7.inputs.text"
+  #     seed: "3.inputs.seed"
+  #     steps: "3.inputs.steps"
+  #     cfg: "3.inputs.cfg"
+  #     denoise: "3.inputs.denoise"

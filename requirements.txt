@@ -1,0 +1,3 @@
+# ComfyUI-OpenAI-Image-Gateway uses only ComfyUI's built-in dependencies
+# (aiohttp, PyYAML, Pillow) and Python standard library modules.
+# No extra packages need to be installed.

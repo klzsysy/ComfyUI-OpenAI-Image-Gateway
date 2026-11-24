@@ -221,3 +221,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ComfyUI-OpenAI-Image-Gateway local config & workflows
+config.local.yaml
+config.local.json
+config.yaml
+config.json
+workflows/local/
+

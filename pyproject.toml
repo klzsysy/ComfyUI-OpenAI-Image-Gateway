@@ -1,0 +1,19 @@
+[project]
+name = "comfyui-openai-image-gateway"
+version = "0.1.0"
+description = "Expose ComfyUI workflows as an OpenAI-compatible Images API (/v1/images/edits, /v1/images/generations, /v1/models) with multi-image support."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+
+[project.urls]
+Repository = "https://github.com/klzsysy/ComfyUI-OpenAI-Image-Gateway"
+
+[tool.comfy]
+PublisherId = "klzsysy"
+DisplayName = "ComfyUI OpenAI Image Gateway"
+Icon = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
