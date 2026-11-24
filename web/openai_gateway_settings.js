@@ -455,6 +455,7 @@ function el(tag, attrs = {}, children = []) {
     if (v === undefined || v === null) continue;
     if (k === "class") node.className = v;
     else if (k === "text") node.textContent = v;
+    else if (k === "value") node.value = String(v);
     else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
     else if (k in node && typeof v === "boolean") node[k] = v;
     else node.setAttribute(k, String(v));
@@ -464,6 +465,24 @@ function el(tag, attrs = {}, children = []) {
     node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
   }
   return node;
+}
+
+function isolateInputKeyboard(inputEl, onEnter = null) {
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") return;
+    e.stopPropagation();
+    if (onEnter && e.key === "Enter" && !e.isComposing && inputEl.tagName === "INPUT") {
+      e.preventDefault();
+      onEnter();
+    }
+  });
+  inputEl.addEventListener("keyup", (e) => {
+    if (e.key !== "Escape") e.stopPropagation();
+  });
+  inputEl.addEventListener("keypress", (e) => {
+    e.stopPropagation();
+  });
+  return inputEl;
 }
 
 function formatCapabilities(model, t) {
@@ -541,16 +560,20 @@ function createGatewaySettingsPanel() {
 
   // ---- Card 2: Add Workflow ----
   const wfSelect = el("select", { class: "oig-select" });
-  const nameInput = el("input", {
-    class: "oig-input",
-    type: "text",
-    placeholder: t.modelNamePlaceholder,
-  });
-  const aliasesInput = el("input", {
-    class: "oig-input",
-    type: "text",
-    placeholder: t.aliasesPlaceholder,
-  });
+  const nameInput = isolateInputKeyboard(
+    el("input", {
+      class: "oig-input",
+      type: "text",
+      placeholder: t.modelNamePlaceholder,
+    })
+  );
+  const aliasesInput = isolateInputKeyboard(
+    el("input", {
+      class: "oig-input",
+      type: "text",
+      placeholder: t.aliasesPlaceholder,
+    })
+  );
   const defaultCheck = el("input", { type: "checkbox" });
   let nameTouchedByUser = false;
   nameInput.addEventListener("input", () => {
@@ -683,13 +706,15 @@ function createGatewaySettingsPanel() {
     el("option", { value: "b64_json", text: "b64_json (OpenAI gpt-image-1)" }),
     el("option", { value: "url", text: "url (/view?filename=...)" }),
   ]);
-  const apiKeysInput = el("input", {
-    class: "oig-input",
-    type: "text",
-    placeholder: t.apiKeysPlaceholder,
-  });
-  const timeoutInput = el("input", { class: "oig-input", type: "number", min: "0", step: "10" });
-  const maxNInput = el("input", { class: "oig-input", type: "number", min: "1", max: "16", step: "1" });
+  const apiKeysInput = isolateInputKeyboard(
+    el("input", {
+      class: "oig-input",
+      type: "text",
+      placeholder: t.apiKeysPlaceholder,
+    })
+  );
+  const timeoutInput = isolateInputKeyboard(el("input", { class: "oig-input", type: "number", min: "0", step: "10" }));
+  const maxNInput = isolateInputKeyboard(el("input", { class: "oig-input", type: "number", min: "1", max: "16", step: "1" }));
   const saveGlobalBtn = el("button", {
     class: "oig-btn oig-btn-primary",
     type: "button",
@@ -895,69 +920,114 @@ function createGatewaySettingsPanel() {
     }
 
     if (isExpanded) {
-      const editId = el("input", { class: "oig-input", type: "text", value: model.id });
-      const editAliases = el("input", {
-        class: "oig-input",
-        type: "text",
-        value: (model.aliases || []).join(", "),
-      });
-      const editOutput = el("input", {
-        class: "oig-input",
-        type: "text",
-        value: model.output_node || "",
-      });
-      const editSizeMult = el("input", {
-        class: "oig-input",
-        type: "number",
-        value: String(model.size_multiple || 16),
-      });
-      const editTimeout = el("input", {
-        class: "oig-input",
-        type: "number",
-        value: model.timeout != null ? String(model.timeout) : "",
-      });
+      const cardStatus = el("div", { class: "oig-status" });
+      function showCardStatus(msg, isError = false) {
+        cardStatus.textContent = msg;
+        cardStatus.className = `oig-status show ${isError ? "err" : "ok"}`;
+        showStatus(msg, isError);
+      }
+
+      let doSaveEdit = async () => {};
+      const editId = isolateInputKeyboard(
+        el("input", { class: "oig-input", type: "text", value: model.id }),
+        () => doSaveEdit()
+      );
+      const editAliases = isolateInputKeyboard(
+        el("input", {
+          class: "oig-input",
+          type: "text",
+          value: (model.aliases || []).join(", "),
+        }),
+        () => doSaveEdit()
+      );
+      const editOutput = isolateInputKeyboard(
+        el("input", {
+          class: "oig-input",
+          type: "text",
+          value: model.output_node || "",
+        }),
+        () => doSaveEdit()
+      );
+      const editSizeMult = isolateInputKeyboard(
+        el("input", {
+          class: "oig-input",
+          type: "number",
+          value: String(model.size_multiple || 16),
+        }),
+        () => doSaveEdit()
+      );
+      const editTimeout = isolateInputKeyboard(
+        el("input", {
+          class: "oig-input",
+          type: "number",
+          value: model.timeout != null ? String(model.timeout) : "",
+        }),
+        () => doSaveEdit()
+      );
       const editAllowNoImg = el("input", { type: "checkbox", checked: !!model.allow_no_image });
-      const editBindings = el("textarea", { class: "oig-textarea" });
+      const editBindings = isolateInputKeyboard(el("textarea", { class: "oig-textarea" }));
       editBindings.value = JSON.stringify(model.bindings || {}, null, 2);
-      const editImages = el("textarea", { class: "oig-textarea" });
+      const editImages = isolateInputKeyboard(el("textarea", { class: "oig-textarea" }));
       editImages.value = model.image_inputs ? JSON.stringify(model.image_inputs, null, 2) : "";
 
+      const topSaveBtn = el("button", {
+        class: "oig-btn oig-btn-primary",
+        type: "button",
+        text: t.saveModelBtn,
+        onclick: () => doSaveEdit(),
+      });
       const saveEditBtn = el("button", {
         class: "oig-btn oig-btn-primary",
         type: "button",
         text: t.saveModelBtn,
-        onclick: async () => {
-          clearStatus();
-          try {
-            const parsedBindings = editBindings.value.trim() ? JSON.parse(editBindings.value) : {};
-            const parsedImages = editImages.value.trim() ? JSON.parse(editImages.value) : null;
-            const res = await adminRequest("/models", {
-              method: "POST",
-              body: JSON.stringify({
-                previous_id: model.id,
-                id: editId.value.trim(),
-                aliases: editAliases.value,
-                output_node: editOutput.value.trim() || null,
-                size_multiple: Number(editSizeMult.value || 16),
-                timeout: editTimeout.value.trim() ? Number(editTimeout.value) : null,
-                allow_no_image: editAllowNoImg.checked,
-                bindings: parsedBindings,
-                image_inputs: parsedImages,
-                auto_analyze: false,
-              }),
-            });
-            state = res.state;
-            expandedModelId = res.model_id;
-            renderState();
-            showStatus(t.savedOk, false);
-          } catch (err) {
-            showStatus(String(err?.message || err), true);
-          }
-        },
+        onclick: () => doSaveEdit(),
       });
+
+      doSaveEdit = async () => {
+        clearStatus();
+        cardStatus.className = "oig-status";
+        const newId = editId.value.trim();
+        if (!newId) {
+          showCardStatus(t.needModelName, true);
+          return;
+        }
+        topSaveBtn.disabled = true;
+        saveEditBtn.disabled = true;
+        try {
+          const parsedBindings = editBindings.value.trim() ? JSON.parse(editBindings.value) : {};
+          const parsedImages = editImages.value.trim() ? JSON.parse(editImages.value) : null;
+          const res = await adminRequest("/models", {
+            method: "POST",
+            body: JSON.stringify({
+              previous_id: model.id,
+              id: newId,
+              aliases: editAliases.value,
+              output_node: editOutput.value.trim() || null,
+              size_multiple: Number(editSizeMult.value || 16),
+              timeout: editTimeout.value.trim() ? Number(editTimeout.value) : null,
+              allow_no_image: editAllowNoImg.checked,
+              bindings: parsedBindings,
+              image_inputs: parsedImages,
+              auto_analyze: false,
+            }),
+          });
+          state = res.state;
+          expandedModelId = res.model_id;
+          renderState();
+          showStatus(t.savedOk, false);
+          statusBox.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+        } catch (err) {
+          showCardStatus(String(err?.message || err), true);
+        } finally {
+          topSaveBtn.disabled = false;
+          saveEditBtn.disabled = false;
+        }
+      };
 
       children.push(
         el("div", { class: "oig-advanced-box" }, [
+          cardStatus,
+          el("div", { class: "oig-row", style: "justify-content: flex-end;" }, [topSaveBtn]),
           el("div", { class: "oig-grid-2" }, [
             el("div", { class: "oig-field" }, [el("label", { text: t.modelName }), editId]),
             el("div", { class: "oig-field" }, [el("label", { text: t.aliasesLabel }), editAliases]),

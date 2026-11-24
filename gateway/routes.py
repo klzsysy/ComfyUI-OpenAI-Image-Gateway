@@ -112,7 +112,39 @@ def _is_binary_part(part: Any) -> bool:
     return ctype.startswith("image/") or ctype == "application/octet-stream"
 
 
-def _verify_admin_same_origin(request: web.Request) -> None:
+def _normalize_netloc(netloc: str, scheme: str = "") -> str:
+    value = netloc.strip().lower()
+    if not value:
+        return ""
+    if scheme == "https" and value.endswith(":443"):
+        return value[:-4]
+    if scheme == "http" and value.endswith(":80"):
+        return value[:-3]
+    return value
+
+
+def _extract_forwarded_hosts(request: web.Request) -> list[str]:
+    hosts: list[str] = []
+    xfh = request.headers.get("X-Forwarded-Host", "")
+    if xfh:
+        first = xfh.split(",", 1)[0].strip()
+        if first:
+            hosts.append(first)
+    fwd = request.headers.get("Forwarded", "")
+    if fwd:
+        for part in fwd.split(",")[0].split(";"):
+            k, sep, v = part.strip().partition("=")
+            if sep and k.lower() == "host":
+                cleaned = v.strip().strip('"')
+                if cleaned:
+                    hosts.append(cleaned)
+    host = request.headers.get("Host", "").strip()
+    if host:
+        hosts.append(host)
+    return hosts
+
+
+def _verify_admin_same_origin(request: web.Request, *, public_base_url: str | None = None) -> None:
     """Reject cross-site browser requests against internal ComfyUI Settings admin routes."""
     sec_fetch = request.headers.get("Sec-Fetch-Site", "").strip().lower()
     if sec_fetch == "cross-site":
@@ -122,17 +154,38 @@ def _verify_admin_same_origin(request: web.Request) -> None:
             error_type="permission_error",
             code="forbidden_cross_origin",
         )
+    # Browser-enforced forbidden header guaranteeing exact same origin even behind a proxy
+    # that rewrites Host without forwarding X-Forwarded-Host.
+    if sec_fetch == "same-origin":
+        return
+
     origin = request.headers.get("Origin", "").strip()
-    host = request.headers.get("Host", "").strip().lower()
-    if origin and host:
-        origin_netloc = urlparse(origin).netloc.lower()
-        if origin_netloc and origin_netloc != host:
-            raise GatewayError(
-                "Cross-origin requests to gateway admin endpoints are forbidden.",
-                status=403,
-                error_type="permission_error",
-                code="forbidden_cross_origin",
-            )
+    if not origin:
+        return
+
+    parsed_origin = urlparse(origin)
+    origin_scheme = parsed_origin.scheme.lower()
+    origin_netloc = _normalize_netloc(parsed_origin.netloc, origin_scheme)
+    if not origin_netloc:
+        return
+
+    proto = (request.headers.get("X-Forwarded-Proto") or request.scheme or origin_scheme).split(",", 1)[0].strip().lower()
+    allowed: set[str] = set()
+    for candidate in _extract_forwarded_hosts(request):
+        allowed.add(_normalize_netloc(candidate, proto))
+        allowed.add(_normalize_netloc(candidate, origin_scheme))
+    if public_base_url:
+        pub = urlparse(public_base_url)
+        if pub.netloc:
+            allowed.add(_normalize_netloc(pub.netloc, pub.scheme.lower()))
+
+    if allowed and origin_netloc not in allowed:
+        raise GatewayError(
+            "Cross-origin requests to gateway admin endpoints are forbidden.",
+            status=403,
+            error_type="permission_error",
+            code="forbidden_cross_origin",
+        )
 
 
 def _rebuild_alias_map(models: dict[str, ModelConfig]) -> dict[str, str]:
@@ -212,8 +265,8 @@ class GatewayService:
     def _resolve_base_url(self, request: web.Request) -> str:
         if self._config.public_base_url:
             return self._config.public_base_url
-        scheme = request.headers.get("X-Forwarded-Proto") or request.scheme or "http"
-        host = request.headers.get("X-Forwarded-Host") or request.host
+        scheme = (request.headers.get("X-Forwarded-Proto") or request.scheme or "http").split(",", 1)[0].strip()
+        host = (request.headers.get("X-Forwarded-Host") or request.host).split(",", 1)[0].strip()
         return f"{scheme}://{host}".rstrip("/")
 
     def _build_view_url(self, request: web.Request, *, filename: str, subfolder: str, file_type: str) -> str:
@@ -686,11 +739,11 @@ class GatewayService:
     # ---------- Internal ComfyUI Settings UI Admin Endpoints (Same-Origin Only) ----------
 
     async def handle_admin_get_config(self, request: web.Request) -> web.Response:
-        _verify_admin_same_origin(request)
+        _verify_admin_same_origin(request, public_base_url=self._config.public_base_url)
         return web.json_response(self._serialize_admin_state(request))
 
     async def handle_admin_analyze(self, request: web.Request) -> web.Response:
-        _verify_admin_same_origin(request)
+        _verify_admin_same_origin(request, public_base_url=self._config.public_base_url)
         try:
             body = await request.json()
         except Exception as exc:
@@ -703,7 +756,7 @@ class GatewayService:
         return web.json_response(analyze_workflow(validated))
 
     async def handle_admin_upsert_model(self, request: web.Request) -> web.Response:
-        _verify_admin_same_origin(request)
+        _verify_admin_same_origin(request, public_base_url=self._config.public_base_url)
         try:
             body = await request.json()
         except Exception as exc:
@@ -850,6 +903,31 @@ class GatewayService:
             else (existing.timeout if existing else None)
         )
 
+        # If renaming a model whose workflow is an exclusive managed snapshot under workflows/local/,
+        # migrate the snapshot filename to match the new model ID so old/new names never collide.
+        managed_dir = (self._plugin_root / "workflows" / "local").resolve()
+        old_managed_to_remove: Path | None = None
+        if (
+            previous_id
+            and previous_id != model_id
+            and existing is not None
+            and workflow_prompt is None
+            and not body.get("workflow")
+        ):
+            try:
+                old_real = existing.workflow_path.resolve()
+                shared = any(
+                    k != previous_id and m.workflow_path.resolve() == old_real
+                    for k, m in self._config.models.items()
+                )
+                if not shared and os.path.commonpath((str(managed_dir), str(old_real))) == str(managed_dir):
+                    migrated_path = save_managed_workflow(self._plugin_root, model_id, template)
+                    if migrated_path.resolve() != old_real:
+                        old_managed_to_remove = old_real
+                    wf_path = migrated_path
+            except OSError:
+                pass
+
         new_model = ModelConfig(
             id=model_id,
             workflow_path=wf_path,
@@ -871,13 +949,27 @@ class GatewayService:
             remove_nodes=remove_nodes,
         )
 
-        new_models = dict(self._config.models)
-        new_templates = dict(self._templates)
-        if previous_id and previous_id != model_id and previous_id in new_models:
-            del new_models[previous_id]
-            new_templates.pop(previous_id, None)
-        new_models[model_id] = new_model
-        new_templates[model_id] = template
+        # Preserve display order when renaming an existing model in place.
+        new_models: dict[str, ModelConfig] = {}
+        new_templates: dict[str, dict[str, Any]] = {}
+        inserted = False
+        for k, v in self._config.models.items():
+            if previous_id and k == previous_id:
+                new_models[model_id] = new_model
+                new_templates[model_id] = template
+                inserted = True
+            elif k == model_id:
+                if not inserted:
+                    new_models[model_id] = new_model
+                    new_templates[model_id] = template
+                    inserted = True
+            else:
+                new_models[k] = v
+                if k in self._templates:
+                    new_templates[k] = self._templates[k]
+        if not inserted:
+            new_models[model_id] = new_model
+            new_templates[model_id] = template
 
         alias_map = _rebuild_alias_map(new_models)
         set_default = _parse_bool_strict(body.get("set_default"), False)
@@ -892,6 +984,11 @@ class GatewayService:
             default_model=default_model,
         )
         self._commit_config(updated_cfg, new_templates)
+        if old_managed_to_remove is not None:
+            try:
+                old_managed_to_remove.unlink(missing_ok=True)
+            except OSError:
+                pass
         return web.json_response(
             {
                 "status": "saved",
@@ -902,7 +999,7 @@ class GatewayService:
         )
 
     async def handle_admin_delete_model(self, request: web.Request) -> web.Response:
-        _verify_admin_same_origin(request)
+        _verify_admin_same_origin(request, public_base_url=self._config.public_base_url)
         model_id = request.match_info.get("model_id", "").strip()
         if model_id not in self._config.models:
             raise GatewayError(
@@ -948,7 +1045,7 @@ class GatewayService:
         )
 
     async def handle_admin_update_settings(self, request: web.Request) -> web.Response:
-        _verify_admin_same_origin(request)
+        _verify_admin_same_origin(request, public_base_url=self._config.public_base_url)
         try:
             body = await request.json()
         except Exception as exc:

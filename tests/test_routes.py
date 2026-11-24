@@ -306,6 +306,36 @@ def test_admin_multi_workflow_lifecycle_and_routing(tmp_path: Path):
             blocked = await client.get("/api/openai-gateway/admin/config", headers={"Sec-Fetch-Site": "cross-site"})
             assert blocked.status == 403
 
+            # Cross-origin Origin header (without Sec-Fetch-Site) must also be blocked
+            blocked2 = await client.post(
+                "/api/openai-gateway/admin/models",
+                json={"id": "evil", "workflow_prompt": wf_t2i},
+                headers={"Origin": "https://evil.example.com", "X-Forwarded-Host": "comfy.example.com"},
+            )
+            assert blocked2.status == 403
+
+            # Reverse-proxied same-origin request (Host rewritten, X-Forwarded-Host matches Origin) must succeed
+            proxied_ok = await client.get(
+                "/api/openai-gateway/admin/config",
+                headers={
+                    "Origin": "https://comfy.example.com",
+                    "X-Forwarded-Host": "comfy.example.com:443",
+                    "X-Forwarded-Proto": "https",
+                },
+            )
+            assert proxied_ok.status == 200
+            assert (await proxied_ok.json())["base_url"] == "https://comfy.example.com:443/v1"
+
+            # Reverse-proxied request with Sec-Fetch-Site: same-origin (even without X-Forwarded-Host) must succeed
+            sec_same_ok = await client.get(
+                "/api/openai-gateway/admin/config",
+                headers={
+                    "Origin": "https://comfy.example.com",
+                    "Sec-Fetch-Site": "same-origin",
+                },
+            )
+            assert sec_same_ok.status == 200
+
             # Add workflow 1 under custom name "my-qwen-edit"
             r1 = await client.post(
                 "/api/openai-gateway/admin/models",
@@ -357,6 +387,21 @@ def test_admin_multi_workflow_lifecycle_and_routing(tmp_path: Path):
             assert backend.submitted_prompts[-1]["6"]["inputs"]["text"] == "a mountain lake"
             assert backend.submitted_prompts[-1]["5"]["inputs"]["width"] == 768
 
+            # Rename model 1 in place -> preserves order, migrates managed workflow file, updates /v1/models
+            rn_resp = await client.post(
+                "/api/openai-gateway/admin/models",
+                json={
+                    "previous_id": "my-qwen-edit",
+                    "id": "my-qwen-edit-bf16",
+                    "auto_analyze": False,
+                },
+            )
+            assert rn_resp.status == 200
+            rn_body = await rn_resp.json()
+            assert rn_body["state"]["listed_models"] == ["my-qwen-edit-bf16", "my-sdxl-t2i"]
+            assert (tmp_path / "workflows" / "local" / "my-qwen-edit-bf16.json").is_file()
+            assert not (tmp_path / "workflows" / "local" / "my-qwen-edit.json").exists()
+
             # Update settings (disable fallback) and delete first model
             s_resp = await client.put(
                 "/api/openai-gateway/admin/settings",
@@ -365,7 +410,7 @@ def test_admin_multi_workflow_lifecycle_and_routing(tmp_path: Path):
             assert s_resp.status == 200
             assert (await s_resp.json())["state"]["settings"]["fallback_to_default_model"] is False
 
-            del_resp = await client.delete("/api/openai-gateway/admin/models/my-qwen-edit")
+            del_resp = await client.delete("/api/openai-gateway/admin/models/my-qwen-edit-bf16")
             assert del_resp.status == 200
             assert (await del_resp.json())["state"]["listed_models"] == ["my-sdxl-t2i"]
 
